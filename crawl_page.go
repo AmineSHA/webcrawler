@@ -4,52 +4,78 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 )
 
-func crawlPage(rawBaseURL, rawCurrentURL string, pages map[string]int) {
+type config struct {
+	pages              map[string]int
+	baseURL            *url.URL
+	mu                 *sync.Mutex
+	concurrencyControl chan struct{}
+	wg                 *sync.WaitGroup
+}
 
-	parsedBaseUrl, err := url.Parse(rawBaseURL)
-	if err != nil {
-		fmt.Printf("Error parsing baseUrl")
-		return
-	}
+func (cfg *config) crawlPage(rawCurrentURL string) {
+
+	defer cfg.wg.Done()
+
 	parsedCurrentUrl, err := url.Parse(rawCurrentURL)
 	if err != nil {
 		fmt.Printf("Error parsing baseUrl")
+		<-cfg.concurrencyControl
 		return
 	}
 
-	if parsedBaseUrl.Host == parsedCurrentUrl.Host {
+	if cfg.baseURL.Host == parsedCurrentUrl.Host {
 
 		normalizedCurrent, err := normalizeURL(rawCurrentURL)
 		if err != nil {
 			fmt.Printf("Error: %v", err)
+			<-cfg.concurrencyControl
 			return
 		}
 
 		fmt.Printf("Current page: %s \n", rawCurrentURL)
+		firstVisit := cfg.addPageVisit(normalizedCurrent)
 
-		if _, ok := pages[normalizedCurrent]; !ok {
-			pages[normalizedCurrent] = 1
-		} else {
-			pages[normalizedCurrent]++
+		if !firstVisit {
+			<-cfg.concurrencyControl
 			return
 		}
 
 		htmlPage, err := getHTML(rawCurrentURL)
 		if err != nil && strings.Contains(err.Error(), "non HTML page:") {
+			<-cfg.concurrencyControl
 			return
 		}
 
-		urlList, err := getURLsFromHTML(htmlPage, rawBaseURL)
+		urlList, err := getURLsFromHTML(htmlPage, cfg.baseURL.String())
 		if err != nil {
+			<-cfg.concurrencyControl
 			return
 		}
 
 		for _, url := range urlList {
-			crawlPage(rawBaseURL, url, pages)
+			cfg.wg.Add(1)
+			go cfg.crawlPage(url)
+			cfg.concurrencyControl <- struct{}{}
 		}
 
 	}
+	<-cfg.concurrencyControl
+}
+
+func (cfg *config) addPageVisit(normalizedURL string) (isFirst bool) {
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
+
+	isFirst = true
+
+	if _, ok := cfg.pages[normalizedURL]; !ok {
+		cfg.pages[normalizedURL] = 1
+		return isFirst
+	}
+	cfg.pages[normalizedURL]++
+	return !isFirst
 
 }
