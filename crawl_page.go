@@ -4,20 +4,20 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"sync"
 )
-
-type config struct {
-	pages              map[string]int
-	baseURL            *url.URL
-	mu                 *sync.Mutex
-	concurrencyControl chan struct{}
-	wg                 *sync.WaitGroup
-}
 
 func (cfg *config) crawlPage(rawCurrentURL string) {
 
-	defer cfg.wg.Done()
+	cfg.wg.Add(1)
+
+	defer func() {
+		cfg.wg.Done()
+		<-cfg.concurrencyControl
+	}()
+
+	if cfg.counterPages >= cfg.maxPages {
+		return
+	}
 
 	parsedCurrentUrl, err := url.Parse(rawCurrentURL)
 	if err != nil {
@@ -31,7 +31,6 @@ func (cfg *config) crawlPage(rawCurrentURL string) {
 		normalizedCurrent, err := normalizeURL(rawCurrentURL)
 		if err != nil {
 			fmt.Printf("Error: %v", err)
-			<-cfg.concurrencyControl
 			return
 		}
 
@@ -39,13 +38,11 @@ func (cfg *config) crawlPage(rawCurrentURL string) {
 		firstVisit := cfg.addPageVisit(normalizedCurrent)
 
 		if !firstVisit {
-			<-cfg.concurrencyControl
 			return
 		}
 
 		htmlPage, err := getHTML(rawCurrentURL)
 		if err != nil && strings.Contains(err.Error(), "non HTML page:") {
-			<-cfg.concurrencyControl
 			return
 		}
 
@@ -56,26 +53,10 @@ func (cfg *config) crawlPage(rawCurrentURL string) {
 		}
 
 		for _, url := range urlList {
-			cfg.wg.Add(1)
+
 			go cfg.crawlPage(url)
 			cfg.concurrencyControl <- struct{}{}
 		}
 
 	}
-	<-cfg.concurrencyControl
-}
-
-func (cfg *config) addPageVisit(normalizedURL string) (isFirst bool) {
-	cfg.mu.Lock()
-	defer cfg.mu.Unlock()
-
-	isFirst = true
-
-	if _, ok := cfg.pages[normalizedURL]; !ok {
-		cfg.pages[normalizedURL] = 1
-		return isFirst
-	}
-	cfg.pages[normalizedURL]++
-	return !isFirst
-
 }

@@ -2,47 +2,58 @@ package main
 
 import (
 	"fmt"
-	"net/url"
+	"log"
+
 	"os"
-	"sync"
+	"strconv"
 )
+
+type args struct {
+	website        string
+	maxConcurrency int
+	maxPages       int
+}
 
 func main() {
 
 	progArgs := os.Args[1:]
 	nbArgs := len(progArgs)
 
-	if nbArgs < 1 {
-		fmt.Println("no website provided")
-		os.Exit(1)
+	var arguments args = args{
+		website:        "",
+		maxConcurrency: 1,
+		maxPages:       15,
+	}
 
-	} else if nbArgs > 1 {
+	if nbArgs > 3 {
 		fmt.Println("too many arguments provided")
 		os.Exit(1)
 
-	} else {
+	} else if nbArgs > 2 {
+		conc, _ := strconv.Atoi(progArgs[1])
+		arguments.maxConcurrency = conc
+		maxP, _ := strconv.Atoi(progArgs[2])
+		arguments.maxPages = maxP
 
-		fmt.Printf("starting crawl of: %v \n", os.Args[1])
-		parsedBaseURL, err := url.Parse(os.Args[1])
-		if err != nil {
-			fmt.Printf("Error parsing baseUrl")
-			os.Exit(1)
-		}
-		var cfg config = config{
-			pages:              make(map[string]int),
-			baseURL:            parsedBaseURL,
-			mu:                 &sync.Mutex{},
-			concurrencyControl: make(chan struct{}, 5),
-			wg:                 &sync.WaitGroup{},
-		}
-
-		cfg.crawlPage(os.Args[1])
-		cfg.wg.Wait()
-		fmt.Print("----------------------- \n")
-		for k, v := range cfg.pages {
-			fmt.Printf("You visited %s %d times. \n", k, v)
-		}
-
+	} else if nbArgs > 1 {
+		conc, _ := strconv.Atoi(progArgs[1])
+		arguments.maxConcurrency = conc
+	} else if nbArgs < 1 {
+		fmt.Println("no website provided")
+		os.Exit(1)
 	}
+
+	arguments.website = progArgs[0]
+
+	fmt.Printf("starting crawl of: %v \n", os.Args[1])
+
+	cfg, err := configSetup(arguments.website, arguments.maxConcurrency, arguments.maxPages)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
+	cfg.crawlPage(arguments.website)
+	cfg.wg.Wait()
+	printReport(cfg.pages, cfg.baseURL.String())
 
 }
